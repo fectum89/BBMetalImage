@@ -116,7 +116,11 @@ open class BBMetalBaseFilter: BBMetalImageSource, BBMetalImageConsumer {
     private var completions: [_BBMetalFilterCompletionItem]
     private let lock: DispatchSemaphore
     
-    public init(kernelFunctionName: String, useMPSKernel: Bool = false, useMainBundleKernel: Bool = false) {
+    convenience public init(kernelFunctionName: String, useMPSKernel: Bool = false, useMainBundleKernel: Bool) {
+        self.init(kernelFunctionName: kernelFunctionName, useMPSKernel: useMPSKernel, bundle: useMainBundleKernel ? .main : Bundle(for: BBMetalBaseFilter.self))
+    }
+    
+    public init(kernelFunctionName: String, useMPSKernel: Bool = false, bundle: Bundle = Bundle(for: BBMetalBaseFilter.self)) {
         _consumers = []
         _sources = []
         _sourceSampleTimeIndex = -1
@@ -124,7 +128,7 @@ open class BBMetalBaseFilter: BBMetalImageSource, BBMetalImageConsumer {
         self.useMPSKernel = useMPSKernel
         
         if !useMPSKernel,
-            let library = try? BBMetalDevice.sharedDevice.makeDefaultLibrary(bundle: useMainBundleKernel ? .main : Bundle(for: BBMetalBaseFilter.self)),
+            let library = try? BBMetalDevice.sharedDevice.makeDefaultLibrary(bundle: bundle),
             let kernelFunction = library.makeFunction(name: kernelFunctionName) {
             computePipeline = try? BBMetalDevice.sharedDevice.makeComputePipelineState(function: kernelFunction)
         }
