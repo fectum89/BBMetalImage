@@ -14,7 +14,7 @@ let package = Package(
             name: "BBMetalImage",
             path: "BBMetalImage/BBMetalImage",
             exclude: ["MultipleVideoSource.swift"],
-            resources: [.process("BBMetalImage/BBMetalImage/*.metal")]
+            resources: [.process("BBMetalImage/BBMetalImage/BBMetalAddBlendFilter.metal")]
         )
     ]
 )
