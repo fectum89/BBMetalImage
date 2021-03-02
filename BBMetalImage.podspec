@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
 
   s.name         = 'BBMetalImage'
-  s.version      = '1.1.10'
+  s.version      = '1.1.12'
   s.summary      = 'A Swift library for GPU-accelerated image/video processing based on Metal.'
 
   s.description  = <<-DESC
@@ -27,7 +27,7 @@ Pod::Spec.new do |s|
 
   s.swift_version = '5.0'
 
-  s.source       = { :git => 'https://github.com/Silence-GitHub/BBMetalImage.git', :tag => s.version }
+  s.source       = { :git => 'https://github.com/fectum89/BBMetalImage.git', :tag => s.version }
 
   s.requires_arc = true
 

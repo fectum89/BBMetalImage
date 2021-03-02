@@ -215,6 +215,8 @@ public class BBMetalVideoSource {
         return true
     }
     
+    private var frameDelayCorrectionFactor: Double = 1
+    
     private func processAsset(progress: BBMetalVideoSourceProgress?, completion: BBMetalVideoSourceCompletion?) {
         lock.wait()
         guard let reader = assetReader,
@@ -228,7 +230,7 @@ public class BBMetalVideoSource {
         // Read and process video buffer
         let useVideoRate = _playWithVideoRate
         var startTime: Double = _benchmark ? CACurrentMediaTime() : 0
-        var sleepTime: Double = 0
+        var sleepTimeInterval: Double = 0
         while let reader = assetReader,
             reader.status == .reading,
             let sampleBuffer = videoOutput.copyNextSampleBuffer() {
@@ -242,16 +244,31 @@ public class BBMetalVideoSource {
                 guard let texture = texture(with: sampleBuffer) else { break }
                 
                 let sampleFrameTime = CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer)
+                
                 if useVideoRate {
                     if let lastFrameTime = lastSampleFrameTime,
                         let lastPlayTime = lastActualPlayTime {
                         let detalFrameTime = CMTimeGetSeconds(CMTimeSubtract(sampleFrameTime, lastFrameTime))
                         let detalPlayTime = CACurrentMediaTime() - lastPlayTime
                         if detalFrameTime > detalPlayTime {
-                            sleepTime = detalFrameTime - detalPlayTime
-                            usleep(UInt32(1000000 * sleepTime))
+                            // calculate delay before next frame
+                            sleepTimeInterval = (detalFrameTime - detalPlayTime) * frameDelayCorrectionFactor
+                            // save falling asleep time
+                            let fallingAsleepTimestamp = CACurrentMediaTime()
+                            // wait for next frame
+                            usleep(UInt32(1000000 * sleepTimeInterval))
+                            // calculate real sleep time
+                            let awakeTimestamp = CACurrentMediaTime()
+                            let realSleepTimeinterval = awakeTimestamp - fallingAsleepTimestamp
+                            // correct sleep time for next frame
+                            if realSleepTimeinterval > 0 {
+                                frameDelayCorrectionFactor = max(sleepTimeInterval / realSleepTimeinterval, 0.7)
+                            } else {
+                                frameDelayCorrectionFactor = 1
+                            }
+                           
                         } else {
-                            sleepTime = 0
+                            sleepTimeInterval = 0
                         }
                     }
                     lastSampleFrameTime = sampleFrameTime
@@ -284,12 +301,15 @@ public class BBMetalVideoSource {
                     }
                 }
                 lock.signal()
-                
-                // Transmit video texture
-                let output = BBMetalDefaultTexture(metalTexture: texture.metalTexture,
-                                                   sampleTime: sampleFrameTime,
-                                                   cvMetalTexture: texture.cvMetalTexture)
-                transformFilter.newTextureAvailable(output, from: self)
+            
+                autoreleasepool {
+                    // Transmit video texture
+                    let output = BBMetalDefaultTexture(metalTexture: texture.metalTexture,
+                                                       sampleTime: sampleFrameTime,
+                                                       cvMetalTexture: texture.cvMetalTexture)
+                    transformFilter.newTextureAvailable(output, from: self)
+                }
+            
                 progress?(sampleFrameTime)
                 
                 // Transmit audio buffer
@@ -299,7 +319,7 @@ public class BBMetalVideoSource {
                 if startTime != 0 {
                     let now = CACurrentMediaTime()
                     processedFrameCount += 1
-                    totalProcessFrameTime += now - startTime - sleepTime
+                    totalProcessFrameTime += now - startTime - sleepTimeInterval
                     startTime = now
                 }
 
