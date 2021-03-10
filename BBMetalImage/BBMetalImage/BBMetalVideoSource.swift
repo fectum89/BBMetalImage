@@ -230,116 +230,131 @@ public class BBMetalVideoSource {
         // Read and process video buffer
         let useVideoRate = _playWithVideoRate
         var startTime: Double = _benchmark ? CACurrentMediaTime() : 0
-        var sleepTimeInterval: Double = 0
+        var sleepTime: Double = 0
         while let reader = assetReader,
-            reader.status == .reading,
-            let sampleBuffer = videoOutput.copyNextSampleBuffer() {
-                
-                if let preprocessVideo = _preprocessVideo {
-                    lock.signal()
-                    preprocessVideo(sampleBuffer)
-                    lock.wait()
-                }
-                
-                guard let texture = texture(with: sampleBuffer) else { break }
-                
-                let sampleFrameTime = CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer)
-                
-                if useVideoRate {
+              reader.status == .reading,
+              let sampleBuffer = videoOutput.copyNextSampleBuffer() {
+            
+            if let preprocessVideo = _preprocessVideo {
+                lock.signal()
+                preprocessVideo(sampleBuffer)
+                lock.wait()
+            }
+            
+            guard let texture = texture(with: sampleBuffer) else { break }
+            
+            let sampleFrameTime = CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer)
+            
+            if useVideoRate {
+                //sync video with audio if possible
+                if let playerTime = _audioConsumer?.audioPlayerCurrentTime(), playerTime != .zero {
+                    let diff = CMTimeGetSeconds(sampleFrameTime) - CMTimeGetSeconds(playerTime)
+                    if diff > 0.0 {
+                        sleepTime = diff
+                        if sleepTime > 1.0 {
+                            sleepTime = 0.0
+                        }
+                        usleep(UInt32(1000000 * sleepTime))
+                    } else {
+                        sleepTime = 0
+                    }
+                } else {
+                    // calculate and correct sleep time between frames
                     if let lastFrameTime = lastSampleFrameTime,
-                        let lastPlayTime = lastActualPlayTime {
+                       let lastPlayTime = lastActualPlayTime {
                         let detalFrameTime = CMTimeGetSeconds(CMTimeSubtract(sampleFrameTime, lastFrameTime))
                         let detalPlayTime = CACurrentMediaTime() - lastPlayTime
                         if detalFrameTime > detalPlayTime {
                             // calculate delay before next frame
-                            sleepTimeInterval = (detalFrameTime - detalPlayTime) * frameDelayCorrectionFactor
+                            sleepTime = (detalFrameTime - detalPlayTime) * frameDelayCorrectionFactor
                             // save falling asleep time
                             let fallingAsleepTimestamp = CACurrentMediaTime()
                             // wait for next frame
-                            usleep(UInt32(1000000 * sleepTimeInterval))
+                            usleep(UInt32(1000000 * sleepTime))
                             // calculate real sleep time
                             let awakeTimestamp = CACurrentMediaTime()
                             let realSleepTimeinterval = awakeTimestamp - fallingAsleepTimestamp
                             // correct sleep time for next frame
                             if realSleepTimeinterval > 0 {
-                                frameDelayCorrectionFactor = max(sleepTimeInterval / realSleepTimeinterval, 0.7)
+                                frameDelayCorrectionFactor = max(sleepTime / realSleepTimeinterval, 0.7)
                             } else {
                                 frameDelayCorrectionFactor = 1
                             }
-                           
+
                         } else {
-                            sleepTimeInterval = 0
+                            sleepTime = 0
                         }
                     }
                     lastSampleFrameTime = sampleFrameTime
                     lastActualPlayTime = CACurrentMediaTime()
                 }
-                
-                // Read and process audio buffer
-                // Let video buffer go faster than audio buffer
-                // Make sure audio and video buffer have similar output presentation timestamp
-                var currentAudioBuffer: CMSampleBuffer?
-                let currentAudioConsumer = _audioConsumer
-                if currentAudioConsumer != nil {
-                    if let last = lastAudioBuffer,
-                        CMTimeCompare(CMSampleBufferGetOutputPresentationTimeStamp(last), sampleFrameTime) <= 0 {
+            }
+            
+            // Read and process audio buffer
+            // Let video buffer go faster than audio buffer
+            // Make sure audio and video buffer have similar output presentation timestamp
+            var currentAudioBuffer: CMSampleBuffer?
+            let currentAudioConsumer = _audioConsumer
+            if currentAudioConsumer != nil {
+                if let last = lastAudioBuffer,
+                   CMTimeCompare(CMSampleBufferGetOutputPresentationTimeStamp(last), sampleFrameTime) <= 0 {
+                    // Process audio buffer
+                    currentAudioBuffer = last
+                    lastAudioBuffer = nil
+                    
+                } else if lastAudioBuffer == nil,
+                          audioOutput != nil,
+                          let audioBuffer = audioOutput.copyNextSampleBuffer() {
+                    if CMTimeCompare(CMSampleBufferGetOutputPresentationTimeStamp(audioBuffer), sampleFrameTime) <= 0 {
                         // Process audio buffer
-                        currentAudioBuffer = last
-                        lastAudioBuffer = nil
-                        
-                    } else if lastAudioBuffer == nil,
-                        audioOutput != nil,
-                        let audioBuffer = audioOutput.copyNextSampleBuffer() {
-                        if CMTimeCompare(CMSampleBufferGetOutputPresentationTimeStamp(audioBuffer), sampleFrameTime) <= 0 {
-                            // Process audio buffer
-                            currentAudioBuffer = audioBuffer
-                        } else {
-                            // Audio buffer goes faster than video
-                            // Process audio buffer later
-                            lastAudioBuffer = audioBuffer
-                        }
+                        currentAudioBuffer = audioBuffer
+                    } else {
+                        // Audio buffer goes faster than video
+                        // Process audio buffer later
+                        lastAudioBuffer = audioBuffer
                     }
                 }
-                lock.signal()
+            }
+            lock.signal()
             
-                autoreleasepool {
-                    // Transmit video texture
-                    let output = BBMetalDefaultTexture(metalTexture: texture.metalTexture,
-                                                       sampleTime: sampleFrameTime,
-                                                       cvMetalTexture: texture.cvMetalTexture)
-                    transformFilter.newTextureAvailable(output, from: self)
-                }
+            autoreleasepool {
+                // Transmit video texture
+                let output = BBMetalDefaultTexture(metalTexture: texture.metalTexture,
+                                                   sampleTime: sampleFrameTime,
+                                                   cvMetalTexture: texture.cvMetalTexture)
+                transformFilter.newTextureAvailable(output, from: self)
+            }
             
-                progress?(sampleFrameTime)
-                
-                // Transmit audio buffer
-                if let audioBuffer = currentAudioBuffer { currentAudioConsumer?.newAudioSampleBufferAvailable(audioBuffer) }
-                
-                // Benchmark
-                if startTime != 0 {
-                    let now = CACurrentMediaTime()
-                    processedFrameCount += 1
-                    totalProcessFrameTime += now - startTime - sleepTimeInterval
-                    startTime = now
-                }
-
-                lock.wait()
+            progress?(sampleFrameTime)
+            
+            // Transmit audio buffer
+            if let audioBuffer = currentAudioBuffer { currentAudioConsumer?.newAudioSampleBufferAvailable(audioBuffer) }
+            
+            // Benchmark
+            if startTime != 0 {
+                let now = CACurrentMediaTime()
+                processedFrameCount += 1
+                totalProcessFrameTime += now - startTime - sleepTime
+                startTime = now
+            }
+            
+            lock.wait()
         }
         // Read and process the rest audio buffers
         if let consumer = _audioConsumer,
-            let audioBuffer = lastAudioBuffer {
+           let audioBuffer = lastAudioBuffer {
             lock.signal()
             consumer.newAudioSampleBufferAvailable(audioBuffer)
             lock.wait()
         }
         while let consumer = _audioConsumer,
-            let reader = assetReader,
-            reader.status == .reading,
-            audioOutput != nil,
-            let audioBuffer = audioOutput.copyNextSampleBuffer() {
-                lock.signal()
-                consumer.newAudioSampleBufferAvailable(audioBuffer)
-                lock.wait()
+              let reader = assetReader,
+              reader.status == .reading,
+              audioOutput != nil,
+              let audioBuffer = audioOutput.copyNextSampleBuffer() {
+            lock.signal()
+            consumer.newAudioSampleBufferAvailable(audioBuffer)
+            lock.wait()
         }
         var finish = false
         if assetReader != nil {

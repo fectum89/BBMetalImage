@@ -53,6 +53,13 @@ public protocol BBMetalAudioConsumer: AnyObject {
     ///
     /// - Parameter sampleBuffer: audio sample buffer to receive
     func newAudioSampleBufferAvailable(_ sampleBuffer: CMSampleBuffer)
+    
+    /// Current time of playing auido. Used to for sync video with audio.
+    func audioPlayerCurrentTime() -> CMTime
+}
+
+extension BBMetalAudioConsumer {
+    public func audioPlayerCurrentTime() -> CMTime { return .zero }
 }
 
 public struct BBMetalDefaultTexture: BBMetalTexture {
